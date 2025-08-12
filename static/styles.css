@@ -1,0 +1,79 @@
+body {
+    background-color: #F5F5DC; /* Soft beige background */
+    color: #333; /* Dark neutral text */
+    font-family: 'Roboto', sans-serif;
+    min-height: 100vh; /* Ensure full viewport height */
+    display: flex;
+    flex-direction: column;
+}
+
+.navbar {
+    background-color: #EDE8D5; /* Light wheat hue */
+    border-bottom: 2px solid #8CAA3E; /* Green accent */
+}
+
+#logo-index {
+    width: 20vh;
+    height: 20vh;
+    margin-right: 10px;
+}
+
+.navbar-brand {
+    font-weight: 700;
+    color: #6A994E; /* Natural green */
+}
+
+.navbar-nav .nav-link {
+    font-weight: 400;
+    color: #4A4A4A;
+}
+
+.navbar-nav .nav-link:hover, .nav-link.active {
+    color: #8CAA3E; /* Green accent */
+}
+
+.section-title {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #6A994E;
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+#gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 20px;
+    justify-content: center;
+    padding: 20px;
+}
+
+.image-gallery-img {
+    width: 100%;
+    height: 200px; /* Fixed height for uniformity */
+    object-fit: cover; /* Ensures image fits without distortion */
+    border-radius: 10px;
+    box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
+    transition: transform 0.3s ease-in-out, box-shadow 0.3s ease-in-out;
+}
+
+.image-gallery-img:hover {
+    transform: scale(1.03);
+    box-shadow: 0px 6px 15px rgba(0, 0, 0, 0.2);
+}
+
+.image-metadata {
+    margin-top: 10px;
+    font-size: 0.9rem;
+    text-align: center;
+    color: #6A6A6A;
+}
+
+footer {
+    background-color: #EDE8D5;
+    padding: 15px;
+    margin-top: auto; /* Push footer to the bottom */
+    font-size: 0.9rem;
+    width: 100%;
+    text-align: center;
+}
