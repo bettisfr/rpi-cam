@@ -28,16 +28,16 @@ def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 def capture_photo() -> str | None:
-    """Capture one photo using libcamera-still (no preview)."""
+    """Capture one photo using rpicam-still (no preview)."""
     ensure_dir(IMAGE_DIR)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     file_path = os.path.join(IMAGE_DIR, f"img_{timestamp}.jpg")
-    logging.info("Capturing photo with libcamera-still (continuous AF)...")
+    logging.info("Capturing photo with rpicam-still (continuous AF)...")
 
     try:
         subprocess.run(
             [
-                "libcamera-still",
+                "rpicam-still",
                 "-n",                       # no preview (headless)
                 "-o", file_path,
                 "--autofocus-mode", "continuous"
