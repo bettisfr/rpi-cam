@@ -1,7 +1,8 @@
 import subprocess
 import time
-import os
-from gpiozero import PWMLED
+
+
+host = "141.250.25.160"
 
 # Function to ping the host for 1 minute
 def ping_host(host, timeout=60):
@@ -13,10 +14,8 @@ def ping_host(host, timeout=60):
         time.sleep(1)
     return False
 
-host = "141.250.25.160"
-
 if ping_host(host):
-    command = "source antenv/bin/activate && cd ant-cloud && python client.py"
+    command = "source pyenv/bin/activate && cd rpi-cam && python client.py"
     subprocess.run(command, shell=True, executable="/bin/bash")
 else:
     print("Ping failed, host unreachable.")
