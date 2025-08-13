@@ -1,102 +1,162 @@
 #!/usr/bin/env python3
+import argparse
+import logging
+import os
+import subprocess
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import requests
 from PIL import Image
 import piexif
-import os
-import requests
-from datetime import datetime
-import subprocess
-import logging
 
-# -------------------------------------------------
+# -----------------------------
 # Config
-# -------------------------------------------------
-# SERVER_URL = "http://141.250.25.160:5000/receive"
-SERVER_URL = "http://192.168.1.147:5000/receive"
-IMAGE_DIR = "img"
+# -----------------------------
+IMAGE_DIR = Path("img")
+SERVER_URL = os.environ.get("SERVER_URL", "http://192.168.1.147:5000/receive")
+TIMEOUT = 30  # seconds
+EXTS = {".jpg", ".jpeg"}
 
-# -------------------------------------------------
-# Logging
-# -------------------------------------------------
 logging.basicConfig(
-    format='%(asctime)s [%(levelname)s] %(message)s',
+    format="%(asctime)s [%(levelname)s] %(message)s",
     level=logging.INFO
 )
 
-# -------------------------------------------------
+# -----------------------------
 # Helpers
-# -------------------------------------------------
-def ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
+# -----------------------------
+def ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
 
-def capture_photo() -> str | None:
+def capture_photo() -> Optional[Path]:
     """Capture one photo using rpicam-still (no preview)."""
     ensure_dir(IMAGE_DIR)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    file_path = os.path.join(IMAGE_DIR, f"img_{timestamp}.jpg")
+    file_path = IMAGE_DIR / f"img_{timestamp}.jpg"
     logging.info("Capturing photo with rpicam-still (continuous AF)...")
-
     try:
         subprocess.run(
             [
                 "rpicam-still",
-                "-n",                       # no preview (headless)
-                "-o", file_path,
+                "-n",
+                "-o", str(file_path),
                 "--autofocus-mode", "continuous"
             ],
             check=True
         )
-        logging.info(f"Photo saved as {file_path}")
+        logging.info("Photo saved as %s", file_path)
         return file_path
     except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to capture photo: {e}")
+        logging.error("Failed to capture photo: %s", e)
         return None
 
-def add_basic_metadata(image_path: str) -> None:
-    """Add a simple EXIF comment with timestamp (no GPS/weather)."""
+def add_basic_metadata(image_path: Path) -> None:
+    """Add EXIF: ImageDescription=CapturedAt=... and Exif.DateTimeOriginal."""
     timestamp_human = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     user_comment = f"CapturedAt={timestamp_human}"
-
     try:
-        exif_dict = piexif.load(image_path)
+        exif_dict = piexif.load(str(image_path))
     except Exception:
-        # If the file has no EXIF yet, start from empty
         exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
-
-    # ImageDescription and DateTimeOriginal
     exif_dict["0th"][piexif.ImageIFD.ImageDescription] = user_comment.encode("utf-8")
     exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = timestamp_human.encode("utf-8")
-
     exif_bytes = piexif.dump(exif_dict)
     with Image.open(image_path) as img:
         img.save(image_path, exif=exif_bytes, quality=90, optimize=True)
 
-def send_image_to_server(file_path: str) -> bool:
-    logging.info("Sending image to server...")
+def send_image_to_server(file_path: Path) -> bool:
+    """POST one image to the Flask server."""
     try:
-        with open(file_path, "rb") as img_file:
-            response = requests.post(SERVER_URL, files={"image": img_file}, timeout=20)
-        if 200 <= response.status_code < 300:
-            logging.info("Upload OK")
+        with open(file_path, "rb") as f:
+            r = requests.post(SERVER_URL, files={"image": f}, timeout=TIMEOUT)
+        if 200 <= r.status_code < 300:
             return True
-        else:
-            logging.error(f"Upload failed: HTTP {response.status_code}")
-            return False
+        logging.error("Upload failed %s: HTTP %s %s",
+                      file_path.name, r.status_code, r.text[:200])
+        return False
     except Exception as e:
-        logging.error(f"Error sending image: {e}")
+        logging.error("Upload error %s: %s", file_path.name, e)
         return False
 
-# -------------------------------------------------
-# Main (run-once for cron)
-# -------------------------------------------------
-def main():
-    file_path = capture_photo()
-    if not file_path:
-        return
+def pending_count() -> int:
+    return sum(1 for p in IMAGE_DIR.iterdir() if p.is_file() and p.suffix.lower() in EXTS)
+
+# -----------------------------
+# Commands
+# -----------------------------
+def cmd_photo(args) -> int:
+    p = capture_photo()
+    if not p:
+        return 1
     try:
-        add_basic_metadata(file_path)
+        add_basic_metadata(p)
     except Exception as e:
-        logging.warning(f"Could not add EXIF metadata: {e}")
-    send_image_to_server(file_path)
+        logging.warning("Could not add EXIF metadata to %s: %s", p.name, e)
+
+    # Try immediate upload; delete on success
+    if send_image_to_server(p):
+        try:
+            p.unlink()
+            logging.info("Uploaded and deleted %s", p.name)
+        except Exception as e:
+            logging.error("Uploaded but failed to delete %s: %s", p.name, e)
+    else:
+        logging.info("Upload failed; keeping %s for later offload", p.name)
+
+    logging.info("Pending images in img/: %d", pending_count())
+    return 0
+
+def cmd_offload(args) -> int:
+    ensure_dir(IMAGE_DIR)
+    files = sorted([p for p in IMAGE_DIR.iterdir() if p.is_file() and p.suffix.lower() in EXTS])
+    if not files:
+        logging.info("No images to offload.")
+        return 0
+
+    logging.info("Found %d images to offload.", len(files))
+    success = 0
+    fail = 0
+    backoff = 5
+
+    for p in files:
+        ok = send_image_to_server(p)
+        if ok:
+            try:
+                p.unlink()
+                success += 1
+                logging.info("Uploaded and deleted %s", p.name)
+            except Exception as e:
+                # Rare: uploaded but couldn't delete locally
+                logging.error("Uploaded but failed to delete %s: %s", p.name, e)
+            backoff = 5
+        else:
+            fail += 1
+            logging.info("Will retry after %ss", backoff)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 120)
+
+    remaining = pending_count()
+    logging.info("Offload complete. OK=%d, FAIL=%d, Remaining=%d", success, fail, remaining)
+    return 0
+
+# -----------------------------
+# Entry point
+# -----------------------------
+def main():
+    parser = argparse.ArgumentParser(description="Pi camera client: capture and offload images.")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("photo", help="Capture a single photo, try immediate upload, delete on success.") \
+       .set_defaults(func=cmd_photo)
+
+    sub.add_parser("offload", help="Upload all photos in img/, deleting each on success.") \
+       .set_defaults(func=cmd_offload)
+
+    args = parser.parse_args()
+    exit(args.func(args))
 
 if __name__ == "__main__":
     main()

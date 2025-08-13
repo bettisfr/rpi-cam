@@ -1,25 +1,26 @@
-const socket = io();  // Connect to the WebSocket server
-const gallery = document.querySelector('#gallery');  // Select gallery container
+// script.js
+
+const gallery = document.querySelector('#gallery');  // Container for the cards
 
 // Fetch and display all images from the server
-function loadGalleryImages() {
-    fetch('/get-images')
-        .then(response => response.json())
-        .then(images => {
-            console.log("Fetched images:", images); // Debugging
+async function loadGalleryImages() {
+    try {
+        const resp = await fetch('/get-images');
+        const images = await resp.json();
 
-            gallery.innerHTML = ""; // Clear gallery before adding new images
-
-            images.forEach(imageData => {
-                addImageToGallery(imageData, false); // Add image without real-time effect
-            });
-        })
-        .catch(error => console.error('Error fetching images:', error));
+        gallery.innerHTML = ''; // Clear gallery before adding new images
+        images.forEach(imageData => {
+            addImageToGallery(imageData, /*isRealtime=*/false);
+        });
+    } catch (err) {
+        console.error('Error fetching images:', err);
+    }
 }
 
-// Add an image to the gallery with optional real-time effect
-function addImageToGallery(imageData, isRealTime = true) {
-    console.log("Adding image:", imageData.filename); // Debugging
+// Add an image card to the gallery
+function addImageToGallery(imageData, isRealtime = false) {
+    // imageData comes from /get-images or /receive response
+    // Expected fields: { filename, url, upload_time, metadata: { captured_at } }
 
     const div = document.createElement('div');
     div.classList.add('col');
@@ -27,53 +28,63 @@ function addImageToGallery(imageData, isRealTime = true) {
     // Image element with lazy loading
     const img = document.createElement('img');
     img.classList.add('image-gallery-img');
-    img.dataset.src = `/static/uploads/${imageData.filename}`; // Lazy load source
+    // Use the URL provided by the server (already includes dated subfolder)
+    img.dataset.src = imageData.url;
     img.alt = imageData.filename;
     img.style.visibility = 'hidden'; // Hide until loaded
 
-    // Metadata section
+    // Metadata block
+    const meta = imageData.metadata || {};
+    const capturedAt = meta.captured_at || '';
+    const uploadedAt = imageData.upload_time || '';
+
     const metadataDiv = document.createElement('div');
     metadataDiv.classList.add('image-metadata');
     metadataDiv.innerHTML = `
-        <strong>${imageData.filename}</strong><br>
-        Temperature: ${imageData.metadata?.temperature ?? 'N/A'} °C<br>
-        Pressure: ${imageData.metadata?.pressure ?? 'N/A'} hPa<br>
-        Humidity: ${imageData.metadata?.humidity ?? 'N/A'} %<br>
-        GPS: (${imageData.metadata?.latitude ?? 'N/A'}, ${imageData.metadata?.longitude ?? 'N/A'})<br>
-        ${isRealTime ? '<em>Uploaded just now</em>' : ''}
+        <strong>${escapeHtml(imageData.filename)}</strong><br>
+        ${capturedAt ? `Captured: ${escapeHtml(capturedAt)}<br>` : ''}
+        ${uploadedAt ? `Uploaded: ${escapeHtml(uploadedAt)}<br>` : ''}
+        ${isRealtime ? '<em>Uploaded just now</em>' : ''}
     `;
 
     div.appendChild(img);
     div.appendChild(metadataDiv);
 
-    if (isRealTime) {
-        gallery.prepend(div);  // Add new images to the top
+    if (isRealtime) {
+        gallery.prepend(div);   // Newest first if real-time (kept for future use)
     } else {
-        gallery.appendChild(div); // Add fetched images to the end
+        gallery.appendChild(div);
     }
 
     lazyLoadImage(img);
 }
 
-// Lazy loading for images (loads only when they are near the viewport)
+// Simple HTML escape for safety
+function escapeHtml(str) {
+    return String(str)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+}
+
+// Lazy loading via IntersectionObserver
 function lazyLoadImage(img) {
-    const observer = new IntersectionObserver((entries, observer) => {
+    const observer = new IntersectionObserver((entries, obs) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
-                entry.target.src = entry.target.dataset.src;  // Load image
-                entry.target.onload = () => entry.target.style.visibility = 'visible'; // Show after loading
-                observer.unobserve(entry.target); // Stop observing after loading
+                entry.target.src = entry.target.dataset.src;
+                entry.target.onload = () => { entry.target.style.visibility = 'visible'; };
+                obs.unobserve(entry.target);
             }
         });
-    }, { rootMargin: '100px' }); // Load images slightly before they appear on screen
+    }, { rootMargin: '100px' });
 
     observer.observe(img);
 }
 
-// Listen for real-time image uploads via WebSockets
-socket.on('new_image', (data) => {
-    addImageToGallery(data, true); // Add new image to gallery
-});
-
-// Load all images when the page loads
+// Initial load (and optional periodic refresh if you like)
+// Call loadGalleryImages() again on a timer if you want auto-refresh without websockets.
+// setInterval(loadGalleryImages, 30000);
 loadGalleryImages();
