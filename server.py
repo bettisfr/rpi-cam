@@ -85,6 +85,36 @@ def get_sorted_images(image_folder: str):
         it.pop("mtime", None)
     return items
 
+def list_days(base: str):
+    """Return [{'day':'YYYYMMDD','count':N,'latest_upload_time': '...'}] sorted desc."""
+    days = []
+    if not os.path.isdir(base):
+        return days
+    for name in os.listdir(base):
+        day_dir = os.path.join(base, name)
+        if not (os.path.isdir(day_dir) and name.isdigit() and len(name) == 8):
+            continue
+        # count JPEGs
+        count = sum(
+            1 for f in os.listdir(day_dir)
+            if f.lower().endswith((".jpg", ".jpeg"))
+        )
+        if count == 0:
+            continue
+        # latest mtime
+        latest_mtime = 0
+        for f in os.listdir(day_dir):
+            if not f.lower().endswith((".jpg", ".jpeg")):
+                continue
+            p = os.path.join(day_dir, f)
+            latest_mtime = max(latest_mtime, os.path.getmtime(p))
+        days.append({
+            "day": name,
+            "count": count,
+            "latest_upload_time": _fmt_time(latest_mtime)
+        })
+    days.sort(key=lambda d: d["day"], reverse=True)
+    return days
 
 # ---- Routes ----
 @app.route("/")
@@ -156,6 +186,37 @@ def receive_image():
 @app.route("/uploaded_images")  # legacy alias
 def get_images():
     return jsonify(get_sorted_images(UPLOAD_ROOT))
+
+
+@app.route("/get-days")
+def get_days():
+    return jsonify(list_days(UPLOAD_ROOT))
+
+@app.route("/get-images-by-day")
+def get_images_by_day():
+    day = request.args.get("day", "")
+    if not (day and day.isdigit() and len(day) == 8):
+        return jsonify({"error": "invalid day"}), 400
+    day_dir = os.path.join(UPLOAD_ROOT, day)
+    if not os.path.isdir(day_dir):
+        return jsonify([])
+    # Reuse the formatter but only for this folder
+    items = []
+    for f in os.listdir(day_dir):
+        if not f.lower().endswith((".jpg", ".jpeg")):
+            continue
+        p = os.path.join(day_dir, f)
+        mtime = os.path.getmtime(p)
+        rel = os.path.relpath(p, start="static").replace("\\", "/")
+        items.append({
+            "filename": f,
+            "url": url_for("static", filename=rel, _external=False),
+            "upload_time": _fmt_time(mtime),
+            "metadata": extract_metadata(p)
+        })
+    # newest first
+    items.sort(key=lambda x: x["upload_time"], reverse=True)
+    return jsonify(items)
 
 
 # ---- Dev server ----
