@@ -19,8 +19,6 @@ IMAGE_DIR = Path("img")
 SERVER_URL = os.environ.get("SERVER_URL", "http://192.168.1.147:5000/receive")
 TIMEOUT = 30  # seconds
 EXTS = {".jpg", ".jpeg"}
-# Choose one: "survey" (~3MP) or "detail" (~12MP on IMX708)
-PHOTO_PRESET = "detail"
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -34,56 +32,37 @@ def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 def capture_photo() -> Optional[Path]:
-    """Capture one photo with Pi Cam v3 AF, max quality for fine detail."""
+    """Capture one photo using rpicam-still (no preview) — classic look.
+       Optional tuning flags are provided but commented out."""
     ensure_dir(IMAGE_DIR)
-    ts = datetime.now()
-    timestamp = ts.strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     file_path = IMAGE_DIR / f"img_{timestamp}.jpg"
-
-    # Max resolution for IMX708 sensor
-    width, height = 4608, 2592
-
-    roi = "0.3,0.3,0.4,0.4"   # Center AF/AE
-    af_mode = "continuous"
-    af_range = "normal"
-    metering = "spot"
-
-    # Shorter shutter in bright hours to reduce motion blur
-    shutter_args = ["--shutter", "8000"] if 9 <= ts.hour <= 17 else []
 
     cmd = [
         "rpicam-still",
         "-n",
-        "--width", str(width),
-        "--height", str(height),
-        "--quality", "100",         # MAX JPEG quality
-        "--denoise", "off",         # preserve all texture
-        "--sharpness", "1.2",       # subtle boost
-        "--autofocus-mode", af_mode,
-        "--autofocus-range", af_range,
-        "--metering", metering,
-        "--roi", roi,
         "-o", str(file_path),
-    ] + shutter_args
+        "--autofocus-mode", "continuous",
+
+        # --- Optional tweaks (uncomment to try) ---
+        # "--autofocus-range", "normal",      # good around 0.5–1.0 m
+        # "--metering", "centreweighted",     # smoother exposure on foliage vs 'spot'
+        # "--quality", "92",                  # JPEG quality (90–95 typical)
+        # "--width", "4608", "--height", "2592",  # full-res IMX708 (16:9)
+        # "--roi", "0.3,0.3,0.4,0.4",         # bias AF/AE to center leaf (x,y,w,h)
+        # "--denoise", "auto",                # default-like look
+        # "--sharpness", "1.1",               # subtle crispness
+        # "--shutter", "8000",                # faster shutter (~1/125s) in bright light
+    ]
 
     logging.info("Capturing photo: %s", " ".join(cmd))
     try:
         subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError:
-        logging.warning("Capture failed; retrying with single-shot AF.")
-        cmd_retry = cmd.copy()
-        for i, v in enumerate(cmd_retry):
-            if v == "--autofocus-mode":
-                cmd_retry[i+1] = "auto"
-                break
-        try:
-            subprocess.run(cmd_retry, check=True)
-        except subprocess.CalledProcessError as e2:
-            logging.error("Failed to capture photo on retry: %s", e2)
-            return None
-
-    logging.info("Photo saved as %s", file_path)
-    return file_path
+        logging.info("Photo saved as %s", file_path)
+        return file_path
+    except subprocess.CalledProcessError as e:
+        logging.error("Failed to capture photo: %s", e)
+        return None
 
 
 def add_basic_metadata(image_path: Path) -> None:
