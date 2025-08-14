@@ -19,6 +19,8 @@ IMAGE_DIR = Path("img")
 SERVER_URL = os.environ.get("SERVER_URL", "http://192.168.1.147:5000/receive")
 TIMEOUT = 30  # seconds
 EXTS = {".jpg", ".jpeg"}
+# Choose one: "survey" (~3MP) or "detail" (~12MP on IMX708)
+PHOTO_PRESET = "detail"
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -32,26 +34,61 @@ def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 def capture_photo() -> Optional[Path]:
-    """Capture one photo using rpicam-still (no preview)."""
+    """Capture one photo with Pi Cam v3 AF, tuned for ~0.5 m foliage shots."""
     ensure_dir(IMAGE_DIR)
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now()
+    timestamp = ts.strftime("%Y%m%d-%H%M%S")
     file_path = IMAGE_DIR / f"img_{timestamp}.jpg"
-    logging.info("Capturing photo with rpicam-still (continuous AF)...")
+
+    # --- Sensor / output ---
+    width, height = 4608, 2592      # full-res IMX708 (16:9)
+    quality = "92"                  # JPEG quality (balance size/detail)
+
+    # --- AF/AE targeting ---
+    roi = "0.3,0.3,0.4,0.4"         # center patch for AF/AE (x,y,w,h in 0..1)
+    af_mode = "continuous"          # keep focusing as leaves move
+    af_range = "normal"             # 0.5 m => use normal, not macro
+    metering = "spot"               # meter the subject leaf, not bright background
+
+    # --- Daylight anti-blur (reduce wind blur) ---
+    # Use a shorter shutter during bright hours; adjust if images look too dark.
+    shutter_args = ["--shutter", "8000"] if 9 <= ts.hour <= 17 else []  # 1/125 s
+
+    cmd = [
+        "rpicam-still",
+        "-n",
+        "--width", str(width),
+        "--height", str(height),
+        "--quality", quality,
+        "--autofocus-mode", af_mode,
+        "--autofocus-range", af_range,
+        "--metering", metering,
+        "--roi", roi,
+        "--denoise", "auto",
+        # Optional: lock white balance for consistency across the day:
+        # "--awb", "sunlight",
+        "-o", str(file_path),
+    ] + shutter_args
+
+    logging.info("Capturing photo: %s", " ".join(cmd))
     try:
-        subprocess.run(
-            [
-                "rpicam-still",
-                "-n",
-                "-o", str(file_path),
-                "--autofocus-mode", "continuous"
-            ],
-            check=True
-        )
-        logging.info("Photo saved as %s", file_path)
-        return file_path
-    except subprocess.CalledProcessError as e:
-        logging.error("Failed to capture photo: %s", e)
-        return None
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError:
+        logging.warning("Capture failed; retrying once with single-shot AF.")
+        # Force a refocus with single-shot AF
+        cmd_retry = cmd.copy()
+        for i, v in enumerate(cmd_retry):
+            if v == "--autofocus-mode":
+                cmd_retry[i+1] = "auto"
+                break
+        try:
+            subprocess.run(cmd_retry, check=True)
+        except subprocess.CalledProcessError as e2:
+            logging.error("Failed to capture photo on retry: %s", e2)
+            return None
+
+    logging.info("Photo saved as %s", file_path)
+    return file_path
 
 def add_basic_metadata(image_path: Path) -> None:
     """Add EXIF: ImageDescription=CapturedAt=... and Exif.DateTimeOriginal."""
