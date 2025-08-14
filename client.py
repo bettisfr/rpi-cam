@@ -34,39 +34,35 @@ def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 def capture_photo() -> Optional[Path]:
-    """Capture one photo with Pi Cam v3 AF, tuned for ~0.5 m foliage shots."""
+    """Capture one photo with Pi Cam v3 AF, max quality for fine detail."""
     ensure_dir(IMAGE_DIR)
     ts = datetime.now()
     timestamp = ts.strftime("%Y%m%d-%H%M%S")
     file_path = IMAGE_DIR / f"img_{timestamp}.jpg"
 
-    # --- Sensor / output ---
-    width, height = 4608, 2592      # full-res IMX708 (16:9)
-    quality = "92"                  # JPEG quality (balance size/detail)
+    # Max resolution for IMX708 sensor
+    width, height = 4608, 2592
 
-    # --- AF/AE targeting ---
-    roi = "0.3,0.3,0.4,0.4"         # center patch for AF/AE (x,y,w,h in 0..1)
-    af_mode = "continuous"          # keep focusing as leaves move
-    af_range = "normal"             # 0.5 m => use normal, not macro
-    metering = "spot"               # meter the subject leaf, not bright background
+    roi = "0.3,0.3,0.4,0.4"   # Center AF/AE
+    af_mode = "continuous"
+    af_range = "normal"
+    metering = "spot"
 
-    # --- Daylight anti-blur (reduce wind blur) ---
-    # Use a shorter shutter during bright hours; adjust if images look too dark.
-    shutter_args = ["--shutter", "8000"] if 9 <= ts.hour <= 17 else []  # 1/125 s
+    # Shorter shutter in bright hours to reduce motion blur
+    shutter_args = ["--shutter", "8000"] if 9 <= ts.hour <= 17 else []
 
     cmd = [
         "rpicam-still",
         "-n",
         "--width", str(width),
         "--height", str(height),
-        "--quality", quality,
+        "--quality", "100",         # MAX JPEG quality
+        "--denoise", "off",         # preserve all texture
+        "--sharpness", "1.2",       # subtle boost
         "--autofocus-mode", af_mode,
         "--autofocus-range", af_range,
         "--metering", metering,
         "--roi", roi,
-        "--denoise", "auto",
-        # Optional: lock white balance for consistency across the day:
-        # "--awb", "sunlight",
         "-o", str(file_path),
     ] + shutter_args
 
@@ -74,8 +70,7 @@ def capture_photo() -> Optional[Path]:
     try:
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError:
-        logging.warning("Capture failed; retrying once with single-shot AF.")
-        # Force a refocus with single-shot AF
+        logging.warning("Capture failed; retrying with single-shot AF.")
         cmd_retry = cmd.copy()
         for i, v in enumerate(cmd_retry):
             if v == "--autofocus-mode":
@@ -89,6 +84,7 @@ def capture_photo() -> Optional[Path]:
 
     logging.info("Photo saved as %s", file_path)
     return file_path
+
 
 def add_basic_metadata(image_path: Path) -> None:
     """Add EXIF: ImageDescription=CapturedAt=... and Exif.DateTimeOriginal."""
